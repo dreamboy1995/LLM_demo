@@ -7,3 +7,5 @@
 .env
 # 向量库
 chroma_db/
+# pycharm配置
+.idea/
