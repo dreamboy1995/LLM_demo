@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIOps Agent</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; max-width: 800px; margin: 20px auto; padding: 0 10px; background: #f5f5f5; }
+        .chat-container { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .messages { height: 500px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px; padding: 10px; margin-bottom: 15px; background: #fafafa; }
+        .message { margin-bottom: 15px; }
+        .user { text-align: right; }
+        .agent { text-align: left; }
+        .bubble { display: inline-block; padding: 10px 15px; border-radius: 15px; max-width: 70%; word-wrap: break-word; }
+        .user .bubble { background: #007bff; color: white; }
+        .agent .bubble { background: #e9ecef; color: black; }
+        .tool-info { background: #fff3cd; border-left: 4px solid #ffc107; padding: 8px; margin: 8px 0; font-size: 0.9em; border-radius: 4px; }
+        .status { color: #6c757d; font-style: italic; margin: 5px 0; }
+        .input-area { display: flex; gap: 10px; }
+        #userInput { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 20px; }
+        button { padding: 10px 20px; border: none; border-radius: 20px; background: #007bff; color: white; cursor: pointer; }
+        button:disabled { background: #6c757d; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h2>🔧 AIOps 智能故障排查</h2>
+        <div class="messages" id="messages"></div>
+        <div class="input-area">
+            <input type="text" id="userInput" placeholder="描述故障，如：订单 ORD-FAIL-0001 支付失败">
+            <button onclick="sendMessage()">发送</button>
+        </div>
+    </div>
+
+    <script>
+        const messagesDiv = document.getElementById('messages');
+        const userInput = document.getElementById('userInput');
+
+        function addMessage(role, content = '') {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.innerHTML = `<div class="bubble">${content}</div>`;
+            messagesDiv.appendChild(div);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            return div;
+        }
+
+        function addToolInfo(html) {
+            const div = document.createElement('div');
+            div.className = 'tool-info';
+            div.innerHTML = html;
+            messagesDiv.appendChild(div);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function addStatus(text) {
+            const div = document.createElement('div');
+            div.className = 'status';
+            div.textContent = text;
+            messagesDiv.appendChild(div);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message) return;
+            userInput.value = '';
+            addMessage('user', message);
+
+            const button = document.querySelector('button');
+            button.disabled = true;
+
+            const response = await fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let currentBubble = null;
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data === '[DONE]') continue;
+                        try {
+                            const event = JSON.parse(data);
+                            if (event.type === 'tool_call') {
+                                addToolInfo(`🔍 调用工具 <b>${event.tool}</b>，参数：${JSON.stringify(event.args)}`);
+                            } else if (event.type === 'tool_result') {
+                                addStatus(`工具返回：${event.preview}...`);
+                            } else if (event.type === 'llm_token') {
+                                if (!currentBubble) currentBubble = addMessage('agent');
+                                currentBubble.querySelector('.bubble').textContent += event.content;
+                            } else if (event.type === 'done') {
+                                // 可以不做特别处理
+                            }
+                        } catch (e) {
+                            console.error('解析事件失败:', e);
+                        }
+                    }
+                }
+            }
+            button.disabled = false;
+        }
+
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>
